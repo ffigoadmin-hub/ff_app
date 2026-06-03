@@ -2,61 +2,99 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auth } from '@/lib/auth';
 
-const SB = process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? '';
-const KEY = process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY'] ?? '';
+const SB_URL  = process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? '';
+const SB_SERV = process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '';
+const SB_ANON = process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY'] ?? '';
 
-const headers = (extra?: Record<string, string>) => ({
-  apikey: KEY, Authorization: `Bearer ${KEY}`,
-  'Content-Type': 'application/json', ...extra,
-});
+async function sbFetch<T>(
+  table: string,
+  opts: { method?: string; select?: string; filters?: string; body?: unknown; serviceRole?: boolean } = {},
+): Promise<T[]> {
+  const { method = 'GET', select = '*', filters = '', body, serviceRole = false } = opts;
+  const key = serviceRole ? SB_SERV : SB_ANON;
+  const url = new URL(`${SB_URL}/rest/v1/${table}`);
+  if (method === 'GET') {
+    url.searchParams.set('select', select);
+    if (filters) filters.split('&').forEach((f) => {
+      const eq = f.indexOf('='); if (eq > -1) url.searchParams.set(f.slice(0,eq), f.slice(eq+1));
+    });
+  }
+  const headers: Record<string, string> = {
+    apikey: key, Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json', Accept: 'application/json',
+    Prefer: 'return=representation',
+  };
+  const res = await fetch(url.toString(), {
+    method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store',
+  });
+  if (!res.ok) { const e = await res.text().catch(() => ''); throw new Error(`${method} ${table}: ${e}`); }
+  return res.json() as Promise<T[]>;
+}
 
-const addressSchema = z.object({
-  fullName: z.string().min(2), phone: z.string().min(10),
-  line1: z.string().min(5), city: z.string().min(2),
-  state: z.string().min(2), pincode: z.string().min(6).max(6),
-});
-
-const createOrderSchema = z.object({
+const orderSchema = z.object({
   items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).min(1),
-  paymentMethod: z.enum(['COD', 'RAZORPAY']).default('COD'),
-  address: addressSchema, couponCode: z.string().optional(),
+  paymentMethod: z.enum(['COD', 'RAZORPAY', 'UPI']).default('COD'),
+  address: z.object({
+    fullName: z.string().min(1),
+    phone:    z.string().min(10),
+    line1:    z.string().min(3),
+    city:     z.string().min(2),
+    state:    z.string().min(2),
+    pincode:  z.string().length(6),
+  }),
 });
 
 export async function GET(req: NextRequest) {
   try {
     const session = await auth();
-    const sessionUserId = (session?.user as { id?: string })?.id;
-    const clientUserId = req.headers.get('x-user-id');
-
-    if (clientUserId && sessionUserId && clientUserId !== sessionUserId)
-      return NextResponse.json({ data: [], error: 'Session mismatch — please log in again' }, { status: 401 });
-
-    const userId = sessionUserId ?? clientUserId ?? null;
+    const userId  = (session?.user as { id?: string })?.id;
     if (!userId) return NextResponse.json({ data: [], error: 'Not authenticated' }, { status: 401 });
 
-    const res = await fetch(
-      `${SB}/rest/v1/orders?user_id=eq.${userId}&order=created_at.desc&limit=50&select=*,order_items(*,products(name,image_urls,unit,slug)),addresses(*)`,
-      { headers: headers(), cache: 'no-store' }
-    );
-    const orders: any[] = await res.json();
+    const orders = await sbFetch<Record<string, unknown>>('orders', {
+      select:      'id,order_number,status,payment_status,payment_method,subtotal,delivery_fee,total_amount,delivery_address,created_at',
+      filters:     `user_id=eq.${userId}&order=created_at.desc&limit=50`,
+      serviceRole: true,
+    });
 
-    const formatted = orders.map((o) => ({
-      id: o.id, orderNumber: o.order_number, status: o.status,
-      paymentStatus: o.payment_status, paymentMethod: o.payment_method,
-      subtotal: o.subtotal, deliveryFee: o.delivery_fee, total: o.total,
-      createdAt: o.created_at, address: o.addresses,
-      items: (o.order_items ?? []).map((item: any) => {
-        let imgs: string[] = [];
-        try { imgs = JSON.parse(item.products?.image_urls ?? '[]'); } catch {}
-        return {
-          id: item.id, name: item.products?.name, unit: item.products?.unit,
-          slug: item.products?.slug, imageUrls: imgs,
-          quantity: item.quantity, unitPrice: item.unit_price,
-        };
-      }),
+    const orderIds = (orders as any[]).map((o) => o.id as string);
+    let allItems: any[] = [];
+    if (orderIds.length > 0) {
+      allItems = await sbFetch<Record<string, unknown>>('order_items', {
+        select:      'id,order_id,product_id,quantity,unit_price,total,products(name,unit,image_url,slug)',
+        filters:     `order_id=in.(${orderIds.join(',')})`,
+        serviceRole: true,
+      });
+    }
+
+    const itemsByOrder: Record<string, any[]> = {};
+    for (const item of allItems) {
+      const oid = (item as any).order_id as string;
+      if (!itemsByOrder[oid]) itemsByOrder[oid] = [];
+      itemsByOrder[oid].push(item);
+    }
+
+    const data = (orders as any[]).map((o) => ({
+      id:            o.id,
+      orderNumber:   o.order_number,
+      status:        o.status,
+      paymentStatus: o.payment_status,
+      paymentMethod: o.payment_method,
+      subtotal:      Number(o.subtotal ?? 0),
+      deliveryFee:   Number(o.delivery_fee ?? 0),
+      total:         Number(o.total_amount ?? 0),
+      createdAt:     o.created_at,
+      items: (itemsByOrder[o.id] ?? []).map((i: any) => ({
+        id:        i.id,
+        name:      i.products?.name ?? '',
+        unit:      i.products?.unit ?? 'kg',
+        slug:      i.products?.slug ?? '',
+        imageUrls: [i.products?.image_url ?? ''].filter(Boolean),
+        quantity:  i.quantity,
+        unitPrice: Number(i.unit_price ?? 0),
+      })),
     }));
 
-    return NextResponse.json({ data: formatted });
+    return NextResponse.json({ data });
   } catch (err) {
     console.error('[GET /api/orders]', err);
     return NextResponse.json({ data: [], error: 'Server error' }, { status: 500 });
@@ -65,80 +103,78 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await auth();
-    const userId = (session?.user as { id?: string })?.id;
+    const session     = await auth();
+    const sessionUser = session?.user as { id?: string; name?: string } | undefined;
+    const userId      = sessionUser?.id;
     if (!userId) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-    const body = await req.json();
-    const parsed = createOrderSchema.safeParse(body);
-    if (!parsed.success)
+    const body   = await req.json();
+    const parsed = orderSchema.safeParse(body);
+    if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' }, { status: 400 });
-
+    }
     const { items, paymentMethod, address } = parsed.data;
 
-    // Fetch product prices
     const productIds = items.map((i) => i.productId);
-    const prodsRes = await fetch(
-      `${SB}/rest/v1/products?id=in.(${productIds.map(id => `"${id}"`).join(',')})&select=id,name,price,in_stock`,
-      { headers: headers(), cache: 'no-store' }
-    );
-    const products: any[] = await prodsRes.json();
+    const products = await sbFetch<Record<string, unknown>>('products', {
+      select:      'id,name,website_price,price,in_stock',
+      filters:     `id=in.(${productIds.join(',')})&is_published=eq.true`,
+      serviceRole: true,
+    });
 
     if (products.length !== productIds.length) {
-      const found = new Set(products.map((p) => p.id));
-      const missing = productIds.filter((id) => !found.has(id));
-      return NextResponse.json({ error: 'Some items are no longer available. Please refresh your cart.', missingIds: missing }, { status: 422 });
+      return NextResponse.json({ error: 'Some items are unavailable. Please refresh your cart.' }, { status: 422 });
     }
 
     const priceMap: Record<string, number> = {};
-    for (const p of products) priceMap[p.id] = p.price;
+    for (const p of products as any[]) priceMap[p.id] = Number(p.website_price ?? p.price ?? 0);
 
-    const subtotal = items.reduce((s, i) => s + (priceMap[i.productId] ?? 0) * i.quantity, 0);
-    const deliveryFee = subtotal >= 500 ? 0 : 40;
-    const total = subtotal + deliveryFee;
-    const orderNumber = 'FF' + Date.now().toString().slice(-8);
+    const subtotal    = items.reduce((s, i) => s + (priceMap[i.productId] ?? 0) * i.quantity, 0);
+    const deliveryFee = subtotal >= 499 ? 0 : 40;
+    const total       = subtotal + deliveryFee;
+    const orderNumber = 'FF-' + Date.now().toString().slice(-6);
 
-    // Create address
-    const addrRes = await fetch(`${SB}/rest/v1/addresses`, {
-      method: 'POST',
-      headers: headers({ Prefer: 'return=representation' }),
-      body: JSON.stringify({
-        user_id: userId, label: address.fullName.trim() || 'Order Address',
-        line1: address.line1, city: address.city, state: address.state,
-        pincode: address.pincode, lat: 0, lng: 0, is_default: false,
-      }),
-    });
-    const addrRows: any[] = await addrRes.json();
-    const newAddress = addrRows[0];
+    // Format so pincode extraction regex (\d{6})$ works
+    const deliveryAddress = `${address.fullName}\n${address.phone}\n${address.line1}, ${address.city}, ${address.state} - ${address.pincode}`;
 
-    // Create order
-    const orderRes = await fetch(`${SB}/rest/v1/orders`, {
-      method: 'POST',
-      headers: headers({ Prefer: 'return=representation' }),
-      body: JSON.stringify({
-        order_number: orderNumber, user_id: userId, address_id: newAddress.id,
-        dark_store_id: 'default-store', status: 'PLACED',
-        payment_method: paymentMethod, payment_status: 'PENDING',
-        subtotal, delivery_fee: deliveryFee, total,
-      }),
-    });
-    const orderRows: any[] = await orderRes.json();
-    const order = orderRows[0];
-
-    // Create order items
-    await fetch(`${SB}/rest/v1/order_items`, {
-      method: 'POST',
-      headers: headers({ Prefer: 'return=minimal' }),
-      body: JSON.stringify(
-        items.map((i) => ({
-          order_id: order.id, product_id: i.productId,
-          quantity: i.quantity, unit_price: priceMap[i.productId] ?? 0,
-          total: (priceMap[i.productId] ?? 0) * i.quantity,
-        }))
-      ),
+    const [newOrder] = await sbFetch<any>('orders', {
+      method:      'POST',
+      serviceRole: true,
+      body: {
+        user_id:          userId,
+        order_number:     orderNumber,
+        customer_name:    address.fullName,
+        customer_phone:   address.phone,
+        subtotal,
+        delivery_fee:     deliveryFee,
+        total_amount:     total,
+        total,
+        delivery_address: deliveryAddress,
+        delivery_pincode: address.pincode,
+        payment_method:   paymentMethod.toLowerCase(),
+        payment_status:   paymentMethod === 'COD' ? 'unpaid' : 'paid',
+        status:           'PLACED',
+      },
     });
 
-    return NextResponse.json({ order: { ...order, items: [] } }, { status: 201 });
+    if (!newOrder?.id) throw new Error('Order insert failed');
+
+    await sbFetch('order_items', {
+      method:      'POST',
+      serviceRole: true,
+      body: items.map((i) => ({
+        order_id:   newOrder.id,
+        product_id: i.productId,
+        quantity:   i.quantity,
+        unit_price: priceMap[i.productId] ?? 0,
+        total:      (priceMap[i.productId] ?? 0) * i.quantity,
+      })),
+    });
+
+    return NextResponse.json({
+      order: { id: newOrder.id, orderNumber: newOrder.order_number, total, status: 'PLACED' },
+    }, { status: 201 });
+
   } catch (err) {
     console.error('[POST /api/orders]', err);
     return NextResponse.json({ error: 'Failed to place order. Please try again.' }, { status: 500 });
