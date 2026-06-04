@@ -31,9 +31,15 @@ async function sbFetch<T>(
   return res.json() as Promise<T[]>;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const orderSchema = z.object({
   userId: z.string().optional(),
-  items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).min(1),
+  items: z.array(z.object({
+    productId:   z.string(),
+    productName: z.string().optional(),
+    quantity:    z.number().int().positive(),
+  })).min(1),
   paymentMethod: z.enum(['COD', 'RAZORPAY', 'UPI']).default('COD'),
   address: z.object({
     fullName: z.string().min(1),
@@ -112,26 +118,48 @@ export async function POST(req: NextRequest) {
     const { items, paymentMethod, address } = parsed.data;
     const userId = parsed.data.userId || `guest-${Date.now()}`;
 
-    const productIds = items.map((i) => i.productId);
-    const products = await sbFetch<Record<string, unknown>>('products', {
-      select:      'id,name,website_price,price,in_stock',
-      filters:     `id=in.(${productIds.join(',')})&is_published=eq.true`,
-      serviceRole: true,
-    });
+    // Split items: valid UUIDs (current catalog) vs legacy IDs (stale localStorage)
+    const uuidItems   = items.filter((i) => UUID_RE.test(i.productId));
+    const legacyItems = items.filter((i) => !UUID_RE.test(i.productId));
 
-    if (products.length !== productIds.length) {
-      return NextResponse.json({ error: 'Some items are unavailable. Please refresh your cart.' }, { status: 422 });
+    const productMap: Record<string, { id: string; price: number }> = {};
+
+    // 1. Fetch UUID items by ID
+    if (uuidItems.length > 0) {
+      const rows = await sbFetch<any>('products', {
+        select:      'id,name,website_price,price',
+        filters:     `id=in.(${uuidItems.map((i) => i.productId).join(',')})&is_published=eq.true`,
+        serviceRole: true,
+      });
+      for (const p of rows) productMap[p.id] = { id: p.id, price: Number(p.website_price ?? p.price ?? 0) };
     }
 
-    const priceMap: Record<string, number> = {};
-    for (const p of products as any[]) priceMap[p.id] = Number(p.website_price ?? p.price ?? 0);
+    // 2. Fetch legacy items by name fallback
+    for (const item of legacyItems) {
+      const name = item.productName ?? '';
+      if (!name) continue;
+      const rows = await sbFetch<any>('products', {
+        select:  'id,name,website_price,price',
+        filters: `name=ilike.*${encodeURIComponent(name)}*&is_published=eq.true&limit=1`,
+        serviceRole: true,
+      });
+      if (rows[0]) productMap[item.productId] = { id: rows[0].id, price: Number(rows[0].website_price ?? rows[0].price ?? 0) };
+    }
 
-    const subtotal    = items.reduce((s, i) => s + (priceMap[i.productId] ?? 0) * i.quantity, 0);
+    // 3. Any item still unresolved = unavailable
+    const missing = items.filter((i) => !productMap[i.productId]);
+    if (missing.length > 0) {
+      return NextResponse.json(
+        { error: 'Some items are no longer available. Please clear your cart and add items again.' },
+        { status: 422 }
+      );
+    }
+
+    const subtotal    = items.reduce((s, i) => s + (productMap[i.productId]?.price ?? 0) * i.quantity, 0);
     const deliveryFee = subtotal >= 499 ? 0 : 40;
     const total       = subtotal + deliveryFee;
     const orderNumber = 'FF-' + Date.now().toString().slice(-6);
 
-    // Format so pincode extraction regex (\d{6})$ works
     const deliveryAddress = `${address.fullName}\n${address.phone}\n${address.line1}, ${address.city}, ${address.state} - ${address.pincode}`;
 
     const [newOrder] = await sbFetch<any>('orders', {
@@ -161,10 +189,10 @@ export async function POST(req: NextRequest) {
       serviceRole: true,
       body: items.map((i) => ({
         order_id:   newOrder.id,
-        product_id: i.productId,
+        product_id: productMap[i.productId]?.id ?? i.productId,
         quantity:   i.quantity,
-        unit_price: priceMap[i.productId] ?? 0,
-        total:      (priceMap[i.productId] ?? 0) * i.quantity,
+        unit_price: productMap[i.productId]?.price ?? 0,
+        total:      (productMap[i.productId]?.price ?? 0) * i.quantity,
       })),
     });
 
