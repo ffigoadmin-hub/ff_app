@@ -32,6 +32,45 @@ async function sbFetch<T>(
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Adjectives/qualifiers to strip when doing fallback name lookups
+const STRIP_WORDS = new Set(['organic', 'fresh', 'baby', 'red', 'green', 'yellow', 'mini', 'premium',
+  'sweet', 'wild', 'local', 'farm', 'raw', 'dried', 'whole', 'natural', 'pure']);
+
+async function resolveProductByName(name: string): Promise<{ id: string; price: number } | null> {
+  const tryLookup = async (term: string) => {
+    const rows = await sbFetch<any>('products', {
+      select:  'id,website_price,price',
+      filters: `name=ilike.*${encodeURIComponent(term)}*&is_published=eq.true&limit=1`,
+      serviceRole: true,
+    });
+    return rows[0] ? { id: rows[0].id, price: Number(rows[0].website_price ?? rows[0].price ?? 0) } : null;
+  };
+
+  // 1. Full name
+  let res = await tryLookup(name);
+  if (res) return res;
+
+  // 2. Name without spaces (e.g. "Sweet Corn" → "SweetCorn" → matches "Sweetcorn")
+  res = await tryLookup(name.replace(/\s+/g, ''));
+  if (res) return res;
+
+  // 3. Each word, longest first, stripping qualifier words
+  const words = name.split(/\s+/).filter(w => w.length > 2);
+  const meaningful = words.filter(w => !STRIP_WORDS.has(w.toLowerCase()));
+  const candidates = meaningful.length > 0 ? meaningful : words;
+
+  for (const word of [...candidates].reverse()) {
+    res = await tryLookup(word);
+    if (res) return res;
+    // Try without trailing 's' (plural → singular)
+    if (word.endsWith('s') && word.length > 4) {
+      res = await tryLookup(word.slice(0, -1));
+      if (res) return res;
+    }
+  }
+
+  return null;
+}
 
 const orderSchema = z.object({
   userId: z.string().optional(),
@@ -118,13 +157,12 @@ export async function POST(req: NextRequest) {
     const { items, paymentMethod, address } = parsed.data;
     const userId = parsed.data.userId || `guest-${Date.now()}`;
 
-    // Split items: valid UUIDs (current catalog) vs legacy IDs (stale localStorage)
     const uuidItems   = items.filter((i) => UUID_RE.test(i.productId));
     const legacyItems = items.filter((i) => !UUID_RE.test(i.productId));
 
     const productMap: Record<string, { id: string; price: number }> = {};
 
-    // 1. Fetch UUID items by ID
+    // 1. UUID items — fetch by ID
     if (uuidItems.length > 0) {
       const rows = await sbFetch<any>('products', {
         select:      'id,name,website_price,price',
@@ -134,23 +172,21 @@ export async function POST(req: NextRequest) {
       for (const p of rows) productMap[p.id] = { id: p.id, price: Number(p.website_price ?? p.price ?? 0) };
     }
 
-    // 2. Fetch legacy items by name fallback
+    // 2. Legacy items — smart name lookup
     for (const item of legacyItems) {
+      if (productMap[item.productId]) continue;
       const name = item.productName ?? '';
       if (!name) continue;
-      const rows = await sbFetch<any>('products', {
-        select:  'id,name,website_price,price',
-        filters: `name=ilike.*${encodeURIComponent(name)}*&is_published=eq.true&limit=1`,
-        serviceRole: true,
-      });
-      if (rows[0]) productMap[item.productId] = { id: rows[0].id, price: Number(rows[0].website_price ?? rows[0].price ?? 0) };
+      const resolved = await resolveProductByName(name);
+      if (resolved) productMap[item.productId] = resolved;
     }
 
-    // 3. Any item still unresolved = unavailable
+    // 3. UUID items not in DB → unavailable
     const missing = items.filter((i) => !productMap[i.productId]);
     if (missing.length > 0) {
+      const names = missing.map((i) => i.productName ?? i.productId).join(', ');
       return NextResponse.json(
-        { error: 'Some items are no longer available. Please clear your cart and add items again.' },
+        { error: `Some items are no longer available: ${names}. Please remove them and try again.` },
         { status: 422 }
       );
     }
