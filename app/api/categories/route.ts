@@ -9,7 +9,7 @@ const SUPABASE_KEY = process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY'] ?? '';
 export async function GET() {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/categories?is_active=eq.true&order=sort_order.asc`,
+      `${SUPABASE_URL}/rest/v1/product_categories?is_active=eq.true&order=sort_order.asc`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
     );
     const rows: any[] = await res.json();
@@ -20,11 +20,11 @@ export async function GET() {
       slug:            c.slug,
       description:     c.description ?? null,
       imageUrl:        c.image_url,
-      iconUrl:         c.icon_url ?? null,
-      parentId:        c.parent_id ?? null,
+      iconUrl:         c.icon ?? c.icon_url ?? null,
+      parentId:        null,
       sortOrder:       c.sort_order,
-      metaTitle:       c.meta_title ?? null,
-      metaDescription: c.meta_description ?? null,
+      metaTitle:       null,
+      metaDescription: null,
       _count:          { products: 0 },
     }));
 
