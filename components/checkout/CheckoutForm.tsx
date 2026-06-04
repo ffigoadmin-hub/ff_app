@@ -184,7 +184,7 @@ export function CheckoutForm() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           userId:        user?.id ?? '',
-          items:         items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+          items:         items.map((i) => ({ productId: i.productId, productName: i.product?.name, quantity: i.quantity })),
           paymentMethod: 'COD',
           address:       addressPayload,
         }),
