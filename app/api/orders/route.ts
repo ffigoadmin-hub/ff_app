@@ -32,6 +32,7 @@ async function sbFetch<T>(
 }
 
 const orderSchema = z.object({
+  userId: z.string().optional(),
   items: z.array(z.object({ productId: z.string(), quantity: z.number().int().positive() })).min(1),
   paymentMethod: z.enum(['COD', 'RAZORPAY', 'UPI']).default('COD'),
   address: z.object({
@@ -103,17 +104,13 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session     = await auth();
-    const sessionUser = session?.user as { id?: string; name?: string } | undefined;
-    const userId      = sessionUser?.id;
-    if (!userId) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-
     const body   = await req.json();
     const parsed = orderSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' }, { status: 400 });
     }
     const { items, paymentMethod, address } = parsed.data;
+    const userId = parsed.data.userId || `guest-${Date.now()}`;
 
     const productIds = items.map((i) => i.productId);
     const products = await sbFetch<Record<string, unknown>>('products', {
