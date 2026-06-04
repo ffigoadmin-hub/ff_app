@@ -12,29 +12,24 @@ interface CategoryFiltersProps {
   mobile?: boolean;
 }
 
+// Values must match products API sort strings exactly
 const SORT_OPTIONS = [
-  { value: 'relevance', label: 'Relevance' },
-  { value: 'price_asc', label: 'Price: Low to High' },
-  { value: 'price_desc', label: 'Price: High to Low' },
-  { value: 'discount', label: 'Best Discount' },
-  { value: 'new', label: 'Newest First' },
-];
-
-const BRAND_FILTERS = [
-  { value: 'farmers-factory', label: 'Farmers Factory' },
-  { value: 'local-farms', label: 'Local Farms' },
-  { value: 'organic-life', label: 'Organic Life' },
+  { value: 'relevance',   label: 'Relevance' },
+  { value: 'price-asc',  label: 'Price: Low to High' },
+  { value: 'price-desc', label: 'Price: High to Low' },
+  { value: 'discount',   label: 'Best Discount' },
+  { value: 'newest',     label: 'Newest First' },
 ];
 
 const TAG_FILTERS = [
-  { value: 'organic', label: '🌱 Organic' },
-  { value: 'vegan', label: '🌿 Vegan' },
-  { value: 'gluten-free', label: '🚫 Gluten-Free' },
+  { value: 'organic',    label: '🌱 Organic' },
+  { value: 'fresh',      label: '✨ Fresh' },
+  { value: 'seasonal',   label: '🍂 Seasonal' },
 ];
 
-export function CategoryFilters({ currentSort = 'relevance', currentBrand, currentTags, mobile }: CategoryFiltersProps) {
-  const router = useRouter();
-  const pathname = usePathname();
+export function CategoryFilters({ currentSort = 'relevance', currentTags, mobile }: CategoryFiltersProps) {
+  const router       = useRouter();
+  const pathname     = usePathname();
   const searchParams = useSearchParams();
 
   const updateParam = (key: string, value: string) => {
@@ -45,7 +40,6 @@ export function CategoryFilters({ currentSort = 'relevance', currentBrand, curre
   };
 
   const activeSort = currentSort;
-  const activeBrand = currentBrand || '';
   const activeTags = currentTags ? currentTags.split(',') : [];
 
   const toggleTag = (tag: string) => {
@@ -55,6 +49,7 @@ export function CategoryFilters({ currentSort = 'relevance', currentBrand, curre
     updateParam('tags', next.join(','));
   };
 
+  // Mobile: horizontal chip strip
   if (mobile) {
     return (
       <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
@@ -80,6 +75,7 @@ export function CategoryFilters({ currentSort = 'relevance', currentBrand, curre
     );
   }
 
+  // Desktop: sidebar
   return (
     <div className="space-y-8" role="search" aria-label="Product filters">
       {/* Sort */}
@@ -110,32 +106,9 @@ export function CategoryFilters({ currentSort = 'relevance', currentBrand, curre
         </div>
       </section>
 
-      {/* Brand */}
+      {/* Tags */}
       <section>
-        <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-neutral-900">Brand</h3>
-        <div className="space-y-2.5">
-          {BRAND_FILTERS.map((brand) => (
-            <label key={brand.value} className="group flex cursor-pointer items-center gap-3">
-              <input
-                type="checkbox"
-                checked={activeBrand === brand.value}
-                onChange={() => updateParam('brand', activeBrand === brand.value ? '' : brand.value)}
-                className="h-4 w-4 rounded border-neutral-300 accent-primary-600 transition-all"
-              />
-              <span className={cn(
-                'text-sm font-medium transition-colors',
-                activeBrand === brand.value ? 'text-primary-700 font-bold' : 'text-neutral-600 group-hover:text-neutral-900'
-              )}>
-                {brand.label}
-              </span>
-            </label>
-          ))}
-        </div>
-      </section>
-
-      {/* Dietary tags */}
-      <section>
-        <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-neutral-900">Dietary</h3>
+        <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-neutral-900">Filter</h3>
         <div className="space-y-2.5">
           {TAG_FILTERS.map((tag) => (
             <label key={tag.value} className="group flex cursor-pointer items-center gap-3">
