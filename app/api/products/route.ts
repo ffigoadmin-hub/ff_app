@@ -40,11 +40,12 @@ export async function GET(req: NextRequest) {
     const search   = searchParams.get('search') ?? '';
     const sort     = searchParams.get('sort') ?? 'relevance';
     const featured = searchParams.get('filter') === 'featured';
+    const tags     = searchParams.get('tags') ?? '';
     const page     = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
     const limit    = Math.min(100, parseInt(searchParams.get('limit') ?? '20', 10));
     const offset   = (page - 1) * limit;
 
-    // Resolve category slug → id using product_categories table
+    // Resolve category slug → id
     let categoryId = '';
     if (categorySlug) {
       const catRes = await fetch(
@@ -53,10 +54,6 @@ export async function GET(req: NextRequest) {
       );
       const cats: any[] = await catRes.json();
       categoryId = cats[0]?.id ?? '';
-      if (!categoryId) {
-        // Fallback: filter by category_slug column directly
-        // Don't return empty — let the slug filter below handle it
-      }
     }
 
     const filters: string[] = ['is_active=eq.true', 'is_published=eq.true'];
@@ -68,12 +65,21 @@ export async function GET(req: NextRequest) {
       filters.push(`category_slug=eq.${encodeURIComponent(categorySlug)}`);
     }
     if (search) filters.push(`name=ilike.*${encodeURIComponent(search)}*`);
+    // Tag filter: check if tags JSON column contains the tag value
+    if (tags) {
+      const tagList = tags.split(',').filter(Boolean);
+      if (tagList.length > 0) {
+        filters.push(`tags=ilike.*${encodeURIComponent(tagList[0]!)}*`);
+      }
+    }
 
+    // Sort order
     let order = 'sort_order.asc,created_at.desc';
     if (sort === 'price-asc')  order = 'price.asc';
     if (sort === 'price-desc') order = 'price.desc';
     if (sort === 'name-asc')   order = 'name.asc';
     if (sort === 'newest')     order = 'created_at.desc';
+    if (sort === 'discount')   order = 'mrp.desc,price.asc';  // highest MRP-price gap first
 
     const filterStr  = filters.join('&');
     const fetchLimit = limit * 2;
@@ -93,12 +99,19 @@ export async function GET(req: NextRequest) {
     const range = countRes.headers.get('content-range');
     const total = range ? parseInt(range.split('/')[1] ?? '0', 10) : rows.length;
 
-    if (!Array.isArray(rows)) {
-      console.error('Products API unexpected response:', rows);
-      throw new Error('Bad response from Supabase');
+    if (!Array.isArray(rows)) throw new Error('Bad response from Supabase');
+
+    // For discount sort: re-sort by discount % = (mrp - price) / mrp
+    let sorted = rows;
+    if (sort === 'discount') {
+      sorted = [...rows].sort((a, b) => {
+        const da = a.mrp > 0 ? (a.mrp - a.price) / a.mrp : 0;
+        const db = b.mrp > 0 ? (b.mrp - b.price) / b.mrp : 0;
+        return db - da;
+      });
     }
 
-    const formatted = dedupe(rows.map(formatProduct)).slice(0, limit);
+    const formatted = dedupe(sorted.map(formatProduct)).slice(0, limit);
 
     return NextResponse.json<ApiResponse<PaginatedResponse<Product>>>({
       data: { data: formatted, total, page, limit, hasMore: offset + formatted.length < total },
