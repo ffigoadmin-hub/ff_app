@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9,13 +9,12 @@ import { cn } from '@/lib/utils';
 import type { BannerSlide } from '@/app/api/banners/route';
 
 const FALLBACK_SLIDES: BannerSlide[] = [
-  { id: 'f1', title: 'Farmers Factory', headline: 'Farm-to-Door\nFreshness', subtitle: 'Organic vegetables, grains & dairy direct from Karnataka farms', ctaText: 'Shop Farm Fresh', ctaLink: '/category/farm-fresh', imageUrl: '', videoUrl: '', screenshot1: '', screenshot2: '', bgGradient: 'from-emerald-700 via-green-600 to-teal-600', sortOrder: 0 },
+  { id: 'f1', title: 'Farmers Factory', headline: 'Farm-to-Door\nFreshness', subtitle: 'Organic vegetables, grains & dairy direct from Karnataka farms', ctaText: 'Shop Farm Fresh', ctaLink: '/category/vegetables', imageUrl: '', videoUrl: '', screenshot1: '', screenshot2: '', bgGradient: 'from-emerald-700 via-green-600 to-teal-600', sortOrder: 0 },
   { id: 'f2', title: 'Valluvam Products', headline: 'Traditional\nTaste of Tamil Nadu', subtitle: 'Cold-pressed oils, country sugar, traditional rice varieties & pickles', ctaText: 'Shop Traditional', ctaLink: '/category/valluvam-products', imageUrl: '', videoUrl: '', screenshot1: '', screenshot2: '', bgGradient: 'from-orange-600 via-amber-600 to-yellow-600', sortOrder: 1 },
   { id: 'f3', title: '24-Hour Delivery', headline: 'Order Today\nGet Tomorrow', subtitle: 'Fresh produce harvested daily, delivered to your door within 24 hours', ctaText: 'Order Now', ctaLink: '/', imageUrl: '', videoUrl: '', screenshot1: '', screenshot2: '', bgGradient: 'from-blue-700 via-indigo-600 to-violet-700', sortOrder: 2 },
-  { id: 'f4', title: '100% Natural', headline: 'No Chemicals\nNo Compromise', subtitle: 'Certified organic products good for your family, good for the earth', ctaText: 'Explore Organic', ctaLink: '/category/organic-grains', imageUrl: '', videoUrl: '', screenshot1: '', screenshot2: '', bgGradient: 'from-lime-700 via-green-700 to-emerald-800', sortOrder: 3 },
 ];
 
-const SLIDE_INTERVAL = 5000;
+const SLIDE_INTERVAL = 6000;
 
 function ctaAccent(bg: string): string {
   if (bg.includes('orange') || bg.includes('amber')) return 'bg-white text-orange-700';
@@ -31,74 +30,52 @@ function slideEmoji(bg: string): string {
   return '🥦';
 }
 
-function VideoBackground({ src }: { src: string }) {
-  const ref     = useRef<HTMLVideoElement>(null);
-  const blobRef = useRef<string>('');
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !src) return;
-    if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = ''; }
-    if (src.startsWith('data:')) {
-      try {
-        const [header, b64] = src.split(',');
-        const mimeMatch = header?.match(/data:([^;]+)/);
-        const mime = mimeMatch?.[1] ?? 'video/mp4';
-        const binary = atob(b64 ?? '');
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const blob = new Blob([bytes], { type: mime });
-        const url = URL.createObjectURL(blob);
-        blobRef.current = url;
-        el.src = url;
-      } catch { el.src = src; }
-    } else {
-      el.src = src;
-    }
-    el.load();
-    el.play().catch(() => {});
-    return () => { if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = ''; } };
-  }, [src]);
-
-  return (
-    <video ref={ref} className="absolute inset-0 h-full w-full object-cover" autoPlay muted loop playsInline preload="auto" />
-  );
-}
-
 function SlideBackground({ slide, active }: { slide: BannerSlide; active: boolean }) {
   const hasVideo = Boolean(slide.videoUrl);
   const hasImage = Boolean(slide.imageUrl) && !hasVideo;
   const hasMedia = hasVideo || hasImage;
-  const screenshots = [slide.screenshot1, slide.screenshot2].filter(Boolean);
 
   return (
-    <div className="absolute inset-0 transition-opacity duration-700" style={{ opacity: active ? 1 : 0, zIndex: active ? 1 : 0 }}>
+    <div
+      className="absolute inset-0 transition-opacity duration-700"
+      style={{ opacity: active ? 1 : 0, zIndex: active ? 1 : 0 }}
+    >
+      {/* Base gradient always present */}
       <div className={cn('absolute inset-0 bg-gradient-to-br', slide.bgGradient)} />
+
+      {/* Video background */}
       {hasVideo && (
         <>
-          <VideoBackground src={slide.videoUrl} />
+          <video
+            key={slide.videoUrl}
+            src={slide.videoUrl}
+            className="absolute inset-0 h-full w-full object-cover"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+          />
           <div className="absolute inset-0 bg-gradient-to-r from-black/55 via-black/25 to-transparent" />
-          {screenshots.length > 0 && (
-            <div className="pointer-events-none absolute bottom-0 right-3 flex h-full items-end gap-2">
-              {screenshots.map((ss, i) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={i} src={ss} alt={`Screenshot ${i + 1}`} className={cn('rounded-2xl border-2 border-white/20 object-cover shadow-2xl', i === 0 ? 'h-[80%] w-auto' : 'h-[65%] w-auto')} />
-              ))}
-            </div>
-          )}
         </>
       )}
+
+      {/* Image background */}
       {hasImage && (
         <>
-          {slide.imageUrl.startsWith('data:') ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={slide.imageUrl} alt={slide.headline} className="absolute inset-0 h-full w-full object-cover" />
-          ) : (
-            <Image src={slide.imageUrl} alt={slide.headline} fill sizes="(max-width: 768px) 100vw, 900px" className="object-cover" priority />
-          )}
+          <Image
+            src={slide.imageUrl}
+            alt={slide.headline}
+            fill
+            sizes="(max-width: 768px) 100vw, 900px"
+            className="object-cover"
+            priority
+          />
           <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/30 to-transparent" />
         </>
       )}
+
+      {/* Decorative (no media) */}
       {!hasMedia && (
         <>
           <div className="pointer-events-none absolute inset-0" style={{ backgroundImage: 'radial-gradient(circle at 80% 20%, rgba(255,255,255,0.12) 0%, transparent 50%)' }} />
@@ -136,8 +113,8 @@ export function HeroSlider() {
     return () => clearInterval(t);
   }, [isPlaying, next]);
 
-  const slide    = slides[current] ?? FALLBACK_SLIDES[0]!;
-  const accent   = ctaAccent(slide.bgGradient);
+  const slide  = slides[current] ?? FALLBACK_SLIDES[0]!;
+  const accent = ctaAccent(slide.bgGradient);
   const hasMedia = Boolean(slide.videoUrl) || Boolean(slide.imageUrl);
 
   const textVariants = {
@@ -153,6 +130,8 @@ export function HeroSlider() {
           {slides.map((s, i) => (
             <SlideBackground key={s.id} slide={s} active={i === current} />
           ))}
+
+          {/* Text overlay */}
           <div className="absolute inset-0 z-10 flex flex-col justify-center">
             <AnimatePresence custom={direction} mode="wait" initial={false}>
               <motion.div
@@ -188,18 +167,24 @@ export function HeroSlider() {
               </motion.div>
             </AnimatePresence>
           </div>
+
+          {/* Dots */}
           <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
             {slides.map((_, i) => (
-              <button key={i} onClick={() => goTo(i)} aria-label={`Slide ${i + 1}`} aria-pressed={i === current} className={cn('rounded-full transition-all duration-300 focus-visible:outline-none', i === current ? 'h-2 w-6 bg-white' : 'h-2 w-2 bg-white/50 hover:bg-white/80')} />
+              <button key={i} onClick={() => goTo(i)} aria-label={`Slide ${i + 1}`} aria-pressed={i === current}
+                className={cn('rounded-full transition-all duration-300 focus-visible:outline-none', i === current ? 'h-2 w-6 bg-white' : 'h-2 w-2 bg-white/50 hover:bg-white/80')} />
             ))}
           </div>
+
+          {/* Prev / Next */}
           <button onClick={prev} aria-label="Previous" className="absolute left-2 top-1/2 z-20 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm hover:bg-black/45">
             <ChevronLeft className="h-4 w-4" />
           </button>
           <button onClick={next} aria-label="Next" className="absolute right-2 top-1/2 z-20 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm hover:bg-black/45">
             <ChevronRight className="h-4 w-4" />
           </button>
-          <button onClick={() => setIsPlaying(!isPlaying)} aria-label={isPlaying ? 'Pause' : 'Play'} className="absolute bottom-2 right-2 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm hover:bg-black/50">
+          <button onClick={() => setIsPlaying(!isPlaying)} aria-label={isPlaying ? 'Pause' : 'Play'}
+            className="absolute bottom-2 right-2 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm hover:bg-black/50">
             {isPlaying ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
           </button>
         </div>
