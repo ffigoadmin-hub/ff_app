@@ -60,6 +60,7 @@ const securityHeaders = [
       "frame-src https://api.razorpay.com https://checkout.razorpay.com",
       "worker-src 'self' blob:",
       "manifest-src 'self'",
+      "media-src 'self' https://*.supabase.co blob:",
     ].join('; '),
   },
 ];
