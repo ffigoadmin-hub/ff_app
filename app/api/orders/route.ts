@@ -232,6 +232,35 @@ export async function POST(req: NextRequest) {
       })),
     });
 
+    // ── Sync to ERP sales_orders (fire-and-forget) ──────────────────────────
+    const ERP_URL = process.env['ERP_SUPABASE_URL'] ?? '';
+    const ERP_KEY = process.env['ERP_SUPABASE_ANON_KEY'] ?? '';
+    if (ERP_URL && ERP_KEY) {
+      fetch(`${ERP_URL}/rest/v1/sales_orders`, {
+        method: 'POST',
+        headers: {
+          apikey:         ERP_KEY,
+          Authorization:  `Bearer ${ERP_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer:         'return=minimal',
+        },
+        body: JSON.stringify({
+          customer_name:    address.fullName,
+          source:           'app',
+          channel:          'customer_app',
+          total_amount:     total,
+          net_amount:       total,
+          subtotal:         subtotal,
+          payment_mode:     paymentMethod.toLowerCase() === 'cod' ? 'cod' : 'online',
+          payment_status:   'unpaid',
+          status:           'pending',
+          delivery_address: deliveryAddress,
+          notes:            `Phone: ${address.phone} | App Order: ${newOrder.id}`,
+          order_number:     orderNumber,
+        }),
+      }).catch((e) => console.error('[ERP sync]', e));
+    }
+
     return NextResponse.json({
       order: { id: newOrder.id, orderNumber: newOrder.order_number, total, status: 'PLACED' },
     }, { status: 201 });
